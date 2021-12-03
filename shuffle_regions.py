@@ -12,6 +12,9 @@ import scipy.stats as stats
 
 
 def getCDS(cds_file, log):
+    '''
+    Read the CDS regions from the CDS bed file --cds_file
+    '''
     log.info("Reading CDS regions from %s" % cds_file)
     print ("Reading CDS regions from %s" % cds_file)
     # Read the bed file of coding regions
@@ -26,11 +29,19 @@ def getCDS(cds_file, log):
     return (cds)
 
 
-def getConservedCodingRegions(conserved_file, cds_bed, outfile_stem,
-                              log):
+def getConservedCodingRegions(conserved_file, cds_bed, outfile_stem, log):
+    '''
+    - Read the bed file of conserved codons from --conserved_codon_file
+    - Remove anything without a valid chromosome ID
+    - Remove any codon not of length 3
+    - Sort by start position
+    - Merge adjacent codons to give conserved intervals
+    - Ensure all the intervals are within the CDS defined in the CDS bed file
+    - Save to outfile_stem_conserved_cds.bed
+    '''
 
-    log.info("Reading conserved regions from %s" % conserved_file)
-    print ("Reading conserved regions from %s" % conserved_file)
+    log.info("Reading conserved codons from %s" % conserved_file)
+    print ("Reading conserved codons from %s" % conserved_file)
 
     # Read the bed file of conserved codons
     conserved_codons_df = pd.read_csv(conserved_file,
@@ -45,6 +56,8 @@ def getConservedCodingRegions(conserved_file, cds_bed, outfile_stem,
     # Remove anything where codon length != 3
     conserved_codons_df = conserved_codons_df[
         conserved_codons_df['end'] - conserved_codons_df['start'] == 2]
+    
+    # Make sure start and end positions are integers
     conserved_codons_df['start'] = conserved_codons_df['start'].astype(int)
     conserved_codons_df['end'] = conserved_codons_df['end'].astype(int)
 
@@ -56,15 +69,20 @@ def getConservedCodingRegions(conserved_file, cds_bed, outfile_stem,
 
     # Sort the BedTools object and merge adjacent codons to give conserved
     # windows
-    conserved_windows = conserved_codons.sort().merge(d=1)
-    log.info("Read %i conserved regions" % len(conserved_windows))
-    print ("Read %i conserved regions" % len(conserved_windows))
+    conserved_intervals = conserved_codons.sort().merge(d=1)
+    log.info("Read %i conserved intervals" % len(conserved_intervals))
+    print ("Read %i conserved intervals" % len(conserved_intervals))
+
+    log.info("Saving conserved intervals")
+    print ("Saving conserved intervals")    
     
     log.info("Intersecting coding and conserved regions")
     print("Intersecting coding and conserved regions")
 
     # Take only the parts of the conserved windows which are within the CDS
-    conserved_cds = conserved_windows.intersect(cds_bed).sort().merge()
+    # This should be all of them - it's just a safeguard
+    conserved_cds = conserved_intervals.intersect(cds_bed).sort().merge()
+
     log.info("Found %i conserved coding regions" % len(conserved_cds))
     print ("Found %i conserved coding regions" % len(conserved_cds))   
     
@@ -74,6 +92,9 @@ def getConservedCodingRegions(conserved_file, cds_bed, outfile_stem,
 
 
 def getTestIntervals(test_file, cds_bed, log):
+    '''
+    Get the test intervals from --test_file and intersect them with the CDS
+    '''
     log.info("Reading intervals to test from %s" % test_file)
     print("Reading intervals to test from %s" % test_file)
     # Read the test bed file
@@ -83,6 +104,7 @@ def getTestIntervals(test_file, cds_bed, log):
     print("Finding test intervals within the CDS")
     
     # Get only the parts of the test bed file which are within the CDS
+    # Sort and merge just for safety
     test_bed_cds = test_bed.intersect(cds_bed).sort().merge()
 
     log.info("Found %i test intervals within the CDS" % len(test_bed_cds))
@@ -91,6 +113,14 @@ def getTestIntervals(test_file, cds_bed, log):
 
 
 def makeNonCodingBed(genome_file, cds_bed, outfile_stem, log):
+    '''
+    Make a bed file of only non-coding regions of the genome to use
+    with bedtools shuffle -excl to get only coding intervals.
+    Used this rather than -incl becuase -incl doesn't work with -f
+    which I want to use to limit the shuffle to only regions
+    fully within the CDS.
+    '''
+
     log.info("Reading genome from %s" % genome_file)
     print("Reading genome from %s" % genome_file)
     genome = pybedtools.BedTool(genome_file)
@@ -112,46 +142,119 @@ def makeNonCodingBed(genome_file, cds_bed, outfile_stem, log):
     non_cds_df.to_csv('%s_csizes.txt' % outfile_stem, sep="\t", index=None)
 
 
-def calcStats(bed, conserved_bed):
-    
-    by_conserved_peak = bed.intersect(
-        conserved_bed, wb=True).sort().merge().to_dataframe()
-    by_test_interval = bed.intersect(
-        conserved_bed, wa=True).sort().merge().to_dataframe()
-    total_overlap = bed.intersect(
-        conserved_bed).sort().merge().to_dataframe()
+def calcStats(test_bed, conserved_bed, min_overlap):
+    '''
+    Intersect the conserved intervals with the test intervals and
+    calculate:
+        * n_conserved_intervals - the number of conserved intervals of which
+          at least proportion min_overlap is inside a test_region
+        * prop_conserved_intervals - the proportion of conserved intervals of
+          which at least proportion min_overlap is inside a test_region
+        * n_test_intervals - the number of test intervals which contain at least
+          proportion min_overlap of  a conserved interval
+        * prop_test_intervals - the proportion of test intervals which
+          contain at least proportion min_overlap of a conserved interval
+        * total_overlap - the total number of nucleotides covered by
+          both the test intervals and the conserved intervals, where at least
+          proportion min_overlap of the test interval overlaps.
+    '''
 
-    by_conserved_peak = by_conserved_peak.drop_duplicates()
+    # wb - return the intervals in b (conserved_bed) which overlap
+    # the intervals in a (test_bed)
+    # F - overlap must be at least this proportion of the interval in test_bed
+    by_conserved_interval = test_bed.intersect(
+        conserved_bed, wb=True, F=min_overlap).sort().merge().to_dataframe()
+    
+    # wa - return the intervals in a (test_bed) which overlap the intervals
+    # in b (conserved_bed) by at least proportion min_overlap of the
+    # b interval
+    by_test_interval = test_bed.intersect(
+        conserved_bed, wa=True, F=min_overlap).sort().merge().to_dataframe()
+    
+    
+    # Return only regions which are in both files
+    total_overlap = test_bed.intersect(
+        conserved_bed, F=min_overlap).sort().merge().to_dataframe()
+
+    # Remove duplicate rows from all three bed files
+    by_conserved_interval = by_conserved_interval.drop_duplicates()
     by_test_interval = by_test_interval.drop_duplicates()
     total_overlap = total_overlap.drop_duplicates()
     
-    n_conserved_peaks = len(by_conserved_peak)
+    # Calculate the statistics
+    # Number of intervals in conserved_bed which contain at least
+    # proportion min_overlap of an interval in test_bed
+    n_conserved_intervals = len(by_conserved_interval)
+    # Proportion of the total conserved intervals this applies to
+    prop_conserved_intervals = n_conserved_intervals / len(conserved_bed)
+    
+    # Number of intervals in test_bed which overlap by at least proportion
+    # min_overlap with an interval in conserved_bed
     n_test_intervals = len(by_test_interval)
+    # Proportion of the test intervals this applies to
+    prop_test_intervals = n_test_intervals / len(test_bed)
+    
+    # Total number of nucleotides covered by both the test intervals and
+    # conserved intervals where at least proportion min_overlap of the
+    # test interval overlaps
     total_overlap = sum(total_overlap['end'] - total_overlap['start'])
 
-    return ([n_conserved_peaks, n_test_intervals, total_overlap])
+    return ([n_conserved_intervals, prop_conserved_intervals,
+             n_test_intervals, prop_test_intervals, total_overlap])
     
 
 def addPercentiles(df):
-    for string in ['N_Conserved_Overlapping_Test',
-                   'N_Test_Overlapping_Conserved',
+    '''
+    For each of the count statistics in the results table, calculate the
+    percentile of the data point compared to other points in the same column.
+    '''
+    # Iterate through all the columns
+    for string in ['N_Conserved_in_Test',
+                   'N_Test_in_Conserved',
                    'Total_Overlap']:
+        # Iterate through all the rows
         for ind in df.index.values:
+            # Calculate the percentile and put it in the dataframe
             df.loc[ind, 'Percentile_%s' % string] = stats.percentileofscore(
                 df.loc[df.index != ind, string],
                 df.loc[ind, string])
-    return (df)
+    return (df.round(5))
     
 def shuffle(test_bed, conserved_bed, cds_bed, outfile_stem, n_shuffles,
+            min_overlap,
             log):
-
     # List to store the results
     rows = []
+    
+    # Calculate overlap statistics for the input test file
+    log.info("Calculating overlap between the test intervals and conserved intervals")
+    print ("Calculating overlap between the test intervals and conserved intervals")
+
+    stat = calcStats(test_bed, conserved_bed, min_overlap)
+    
+    log.info("""
+Conserved intervals overlapping test, original: %i
+Proportion of conserved intervals overlapping test, original: %.5f
+Test intervals overlapping conserved intervals, original: %i
+Proportion of test intervals overlapping conserved intervals, original: %.5f
+Total number of overlapping nucleotides, original: %i
+""" % tuple(stat))
+
+    print("""
+Conserved intervals overlapping test, original: %i
+Proportion of conserved intervals overlapping test, original: %.5f
+Test intervals overlapping conserved intervals, original: %i
+Proportion of test intervals overlapping conserved intervals, original: %.5f
+Total number of overlapping nucleotides, original: %i
+""" % tuple(stat))
+                
+    # Store this result
+    rows.append(['orig'] + stat)
+
+
     log.info("Shuffling test file %i times" % n_shuffles)
     print ("Shuffling test file %i times" % n_shuffles)
     
-    stat = calcStats(test_bed, conserved_bed)
-    rows.append(['orig'] + stat)
     # How often to log
     c = int(n_shuffles / 10)
     for i in np.arange(0, n_shuffles):
@@ -165,31 +268,96 @@ def shuffle(test_bed, conserved_bed, cds_bed, outfile_stem, n_shuffles,
         shuf = test_bed.shuffle(g='%s_csizes.txt' % outfile_stem,
                                 excl='%s_non_coding.bed' % outfile_stem,
                                 f=0)
-        stat = calcStats(shuf, conserved_bed)
-
+        
+        # Calculate how much the shuffled file overlaps with the conserved
+        # intervals
+        stat = calcStats(shuf, conserved_bed, min_overlap)
+        
+        # Store the results
         rows.append(['shuffle_%i' % i] + stat)
+    
+    log.info("Calculating overlap statistics for shuffled data")
+    print ("Calculating overlap statistics for shuffled data")
+    # Combine the results into a dataframe
     df = pd.DataFrame(rows, columns=['ID',
-                                     'N_Conserved_Overlapping_Test',
-                                     'N_Test_Overlapping_Conserved',
+                                     'N_Conserved_in_Test',
+                                     'Prop_Conserved_in_Test',
+                                     'N_Test_in_Conserved',
+                                     'Prop_Test_in_Conserved',
                                      'Total_Overlap'])
+    log.info("""
+Conserved intervals overlapping test, shuffled mean: %i
+Proportion of conserved intervals overlapping test, shuffled mean: %.5f
+Test intervals overlapping conserved intervals, shuffled mean: %i
+Proportion of test intervals overlapping conserved intervals, shuffled mean: %.5f
+Total number of overlapping nucleotides, shuffled mean: %i
+""" % tuple([np.mean(df.loc[1:, x]) for x in df.columns[1:]]))
+
+    print("""
+Conserved intervals overlapping test, shuffled mean: %i
+Proportion of conserved intervals overlapping test, shuffled mean: %.5f
+Test intervals overlapping conserved intervals, shuffled mean: %i
+Proportion of test intervals overlapping conserved intervals, shuffled mean: %.5f
+Total number of overlapping nucleotides, shuffled mean: %i
+""" % tuple([np.mean(df.loc[1:, x]) for x in df.columns[1:]]))
+
+    log.info("Calculating percentiles")
+    print ("Calculating percentiles")   
+    # Add a percentile for each count statistic
     df = addPercentiles(df)
+    log.info("""
+Conserved intervals overlapping test, percentile: %.3f
+Test intervals overlapping conserved intervals, percentile: %.3f
+Total number of overlapping nucleotides, percentile: %.3f
+""" % (df.loc[0, 'Percentile_N_Conserved_in_Test'],
+       df.loc[0, 'Percentile_N_Test_in_Conserved'],
+       df.loc[0, 'Percentile_Total_Overlap']))
+    print("""
+Conserved intervals overlapping test, percentile: %.3f
+Test intervals overlapping conserved intervals, percentile: %.3f
+Total number of overlapping nucleotides, percentile: %.3f
+""" % (df.loc[0, 'Percentile_N_Conserved_in_Test'],
+       df.loc[0, 'Percentile_N_Test_in_Conserved'],
+       df.loc[0, 'Percentile_Total_Overlap']))
+
     df.to_csv("%s_shuffle_results.tsv" % outfile_stem, sep="\t", index=None)
     return (df)
 
 
     
 def plotResults(df, outfile_stem, log):
+    '''
+    Plot density plots of the results
+    '''
+    # Create the figure
+    log.info("Plotting results as density plots")
+    print ("Plotting results as density plots")
     f = plt.figure(figsize=(10, 20))
-    a = f.add_subplot(131)
-    shufs = df[1:]
-    shuf_totals = shufs['Total_Overlap']
-    orig_total = df.loc[0, 'Total_Overlap']
-    sns.kdeplot(shuf_totals, ax=a)
-    a.vlines(orig_total, 0, a.get_ylim()[1])
-    xmin = min([orig_total, a.get_xlim()[0]]) * 0.9
-    xmax = max([orig_total, a.get_xlim()[0]]) * 1.1
-    a.set_xlim(xmin, xmax)
-    sns.despine()
+    for i, column in enumerate(['N_Conserved_in_Test',
+                                'N_Test_in_Conserved',
+                                'Total_Overlap']):
+        # Add a subplot
+        a = f.add_subplot(3, 1, i+1)
+        # Take the shuffled values
+        shufs = df[1:]
+        shuf_totals = shufs[column]
+        # Take the original unshuffled value
+        orig_total = df.loc[0, column]
+        
+        # Plot the curve
+        sns.kdeplot(shuf_totals, ax=a)
+        
+        # Add a vertical line for the unshuffled point
+        a.vlines(orig_total, 0, a.get_ylim()[1])
+        
+        # Make sure all the points are within the axis limits
+        xmin = min([orig_total, a.get_xlim()[0]]) * 0.9
+        xmax = max([orig_total, a.get_xlim()[0]]) * 1.1
+        a.set_xlim(xmin, xmax)
+        # Remove the right and top borders
+        sns.despine()
+    
+    # Save and close the figure
     plt.savefig("%s_distribution_total_overlap.png" % outfile_stem,
                 dpi=300, bbox_inches='tight')
     plt.close()
@@ -197,12 +365,10 @@ def plotResults(df, outfile_stem, log):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="""Plot a sashimi plot of chimeric reads, e.g.\n\
-                      plot_chimeric.py --annot_file EqTV_annotations.tsv \
-                      --junction_file_1 junction_file_1.tsv \
-                      --junction_file_2 junction_file_2.tsv \
-                      --ref_fasta BEV.fasta \
-                      --outfile test.png""")
+        description="""Calculate and plot the overlap between a set of test
+                       intervals and a set of conserved codons, then shuffle
+                       the test intervals and find and plot the percentile
+                       of the original result vs the shuffled result""")
 
     parser.add_argument('--cds_file', dest='cds_file', type=str,
                         help='''Path to bed file containing co-ordinates of
@@ -216,7 +382,11 @@ def main():
                         dest="conserved_file", type=str,
                         help='''Path to bed file containing the conserved
                         codons of interest''')
-                        
+
+    parser.add_argument("--min_overlap",
+                        dest="min_overlap", type=float, default=0.5,
+                        help='''Minimum proportion of a conserved interval
+                        which should be inside a test region''')                        
                         
     parser.add_argument("--test_file", dest="test_file", type=str,
                         help='''Path to bed file containing the regions
@@ -248,29 +418,38 @@ def main():
 
     # add the handlers to the logger
     log.addHandler(handler)
+    
+    # pybedtools requires a temporary directory for output files
     try:
         os.mkdir('%s_temp' % (args.outfile_stem))
     except:
         pass
-
     pybedtools.set_tempdir('%s_temp' % args.outfile_stem)
+    
+    # Make a BedTool object of the CDS
     cds = getCDS(args.cds_file, log)
-
-    if os.path.exists("%s_conserved_cds.bed" % args.outfile_stem):
-        conserved_cds = pybedtools.BedTool(
-            "%s_conserved_cds.bed" % args.outfile_stem)
-    else:
-        conserved_cds = getConservedCodingRegions(args.conserved_file,
-                                                  cds,
-                                                  args.outfile_stem,
-                                                  log)
+    
+    # Make a BedTool object of the conserved intervals
+    conserved_cds = getConservedCodingRegions(args.conserved_file,
+                                              cds,
+                                              args.outfile_stem,
+                                              log)
+    
+    # Make a BedTool object of the test intervals
     test_cds = getTestIntervals(args.test_file, cds, log)
     
+    # Make a bed file containing non-coding regions only
     makeNonCodingBed(args.genome_file, cds, args.outfile_stem, log)
     
+    # Shuffle the test intervals and calculate the overlap with the conserved
+    # intervals
     results = shuffle(test_cds, conserved_cds, cds, args.outfile_stem,
-                      args.n_shuffles, log)
+                      args.n_shuffles, args.min_overlap, log)
+    
+    # Plot the results
     plotResults(results, args.outfile_stem, log)
+    
+    # Clean up temporary files
     pybedtools.helpers.cleanup()
     os.rmdir("%s_temp" % args.outfile_stem)
 
