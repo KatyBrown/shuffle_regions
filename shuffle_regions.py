@@ -325,19 +325,19 @@ Total number of overlapping nucleotides, percentile: %.3f
 
 
     
-def plotResults(df, outfile_stem, log):
+def plotResults(df, outfile_stem, log, color='#ea820c'):
     '''
     Plot density plots of the results
     '''
     # Create the figure
     log.info("Plotting results as density plots")
     print ("Plotting results as density plots")
-    f = plt.figure(figsize=(10, 20))
+    f = plt.figure(figsize=(15, 5))
     for i, column in enumerate(['N_Conserved_in_Test',
                                 'N_Test_in_Conserved',
                                 'Total_Overlap']):
         # Add a subplot
-        a = f.add_subplot(3, 1, i+1)
+        a = f.add_subplot(1, 3, i+1)
         # Take the shuffled values
         shufs = df[1:]
         shuf_totals = shufs[column]
@@ -346,10 +346,14 @@ def plotResults(df, outfile_stem, log):
         
         # Plot the curve
         sns.kdeplot(shuf_totals, ax=a)
-        
+        curve = a.lines[0].get_data()
         # Add a vertical line for the unshuffled point
         a.vlines(orig_total, 0, a.get_ylim()[1])
         
+        a.fill_between(curve[0], curve[1], color=color, alpha=0.2)
+        a.fill_between(curve[0],
+                       curve[1],
+                       where=curve[0] >= orig_total, color=color)
         # Make sure all the points are within the axis limits
         xmin = min([orig_total, a.get_xlim()[0]]) * 0.9
         xmax = max([orig_total, a.get_xlim()[0]]) * 1.1
@@ -392,6 +396,8 @@ def main():
                         help='''Path to bed file containing the regions
                         you want to intersect with the conserved regions''')
 
+    parser.add_argument("--plot_color", dest="plot_color", type=str,
+                        default='#ea820c', help="Colour for histograms")
 
     parser.add_argument("--outfile_stem", dest="outfile_stem", type=str,
                         help="Output file prefix")
@@ -447,7 +453,7 @@ def main():
                       args.n_shuffles, args.min_overlap, log)
     
     # Plot the results
-    plotResults(results, args.outfile_stem, log)
+    plotResults(results, args.outfile_stem, log, args.plot_color)
     
     # Clean up temporary files
     pybedtools.helpers.cleanup()
