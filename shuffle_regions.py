@@ -137,9 +137,9 @@ def makeNonCodingBed(genome_file, cds_bed, outfile_stem, log):
     log.info("Saving chromosome sizes as %s_csizes.txt" % outfile_stem)
     print("Saving chromosome sizes as %s_csizes.txt" % outfile_stem)
     
-    non_cds_df = non_cds.to_dataframe()
-    non_cds_df = non_cds_df.drop('start', 1)
-    non_cds_df.to_csv('%s_csizes.txt' % outfile_stem, sep="\t", index=None)
+    genome_df = genome.to_dataframe()
+    genome_df = genome_df.drop('start', 1)
+    genome_df.to_csv('%s_csizes.txt' % outfile_stem, sep="\t", index=None)
 
 
 def calcStats(test_bed, conserved_bed, min_overlap):
@@ -161,20 +161,22 @@ def calcStats(test_bed, conserved_bed, min_overlap):
 
     # wb - return the intervals in b (conserved_bed) which overlap
     # the intervals in a (test_bed)
-    # F - overlap must be at least this proportion of the interval in test_bed
-    by_conserved_interval = test_bed.intersect(
-        conserved_bed, wb=True, F=min_overlap).sort().merge().to_dataframe()
+    # f - overlap must be at least this proportion of the interval in test_bed
+    by_conserved_interval = conserved_bed.intersect(
+        test_bed, wa=True, f=min_overlap, F=min_overlap,
+        e=True).sort().merge().to_dataframe()
     
     # wa - return the intervals in a (test_bed) which overlap the intervals
     # in b (conserved_bed) by at least proportion min_overlap of the
     # b interval
     by_test_interval = test_bed.intersect(
-        conserved_bed, wa=True, F=min_overlap).sort().merge().to_dataframe()
+        conserved_bed, wa=True, f=min_overlap, F=min_overlap,
+        e=True).sort().merge().to_dataframe()
     
     
     # Return only regions which are in both files
     total_overlap = test_bed.intersect(
-        conserved_bed, F=min_overlap).sort().merge().to_dataframe()
+        conserved_bed).sort().merge().to_dataframe()
 
     # Remove duplicate rows from all three bed files
     by_conserved_interval = by_conserved_interval.drop_duplicates()
@@ -219,10 +221,10 @@ def addPercentiles(df):
                 df.loc[df.index != ind, string],
                 df.loc[ind, string])
     return (df.round(5))
-    
+
+
 def shuffle(test_bed, conserved_bed, cds_bed, outfile_stem, n_shuffles,
-            min_overlap,
-            log):
+            min_overlap, log):
     # List to store the results
     rows = []
     
@@ -325,14 +327,14 @@ Total number of overlapping nucleotides, percentile: %.3f
 
 
     
-def plotResults(df, outfile_stem, log, color='#ea820c'):
+def plotResults(df, outfile_stem, log, color='#ea0c31'):
     '''
     Plot density plots of the results
     '''
     # Create the figure
     log.info("Plotting results as density plots")
     print ("Plotting results as density plots")
-    f = plt.figure(figsize=(15, 5))
+    f = plt.figure(figsize=(20, 10))
     for i, column in enumerate(['N_Conserved_in_Test',
                                 'N_Test_in_Conserved',
                                 'Total_Overlap']):
@@ -340,27 +342,38 @@ def plotResults(df, outfile_stem, log, color='#ea820c'):
         a = f.add_subplot(1, 3, i+1)
         # Take the shuffled values
         shufs = df[1:]
-        shuf_totals = shufs[column]
+        prop_column = column.replace("N", "Prop")
+        shuf_totals = shufs[prop_column]
         # Take the original unshuffled value
-        orig_total = df.loc[0, column]
-        
+        orig_total = df.loc[0, prop_column]
+        rgb = matplotlib.colors.to_rgb(color)
+        rgb_new = [r * 0.8 for r in rgb]
+        #c = int(max(shuf_totals) / 20)
         # Plot the curve
-        sns.kdeplot(shuf_totals, ax=a)
-        curve = a.lines[0].get_data()
+        sns.histplot(shuf_totals, ax=a, color=rgb, edgecolor=None,
+                     kde=True, kde_kws={'clip': None})
+        #curve = a.lines[0].get_data()
         # Add a vertical line for the unshuffled point
-        a.vlines(orig_total, 0, a.get_ylim()[1])
-        
-        a.fill_between(curve[0], curve[1], color=color, alpha=0.2)
-        a.fill_between(curve[0],
-                       curve[1],
-                       where=curve[0] >= orig_total, color=color)
+        a.vlines(orig_total, 0, a.get_ylim()[1], color='#5b2c6f', lw=2)
+        perc = df['Percentile_%s' % column].values[0]
+        #a.text(orig_total*0.98, a.get_ylim()[1]*0.8,
+        #       "%s\npercentile" % perc, ha='right', fontsize=8)
+        #a.fill_between(curve[0], curve[1], color=color, alpha=0.3)
+        #a.fill_between(curve[0],
+        #               curve[1],
+        #               where=curve[0] >= orig_total, color=color)
         # Make sure all the points are within the axis limits
         xmin = min([orig_total, a.get_xlim()[0]]) * 0.9
-        xmax = max([orig_total, a.get_xlim()[0]]) * 1.1
+        xmax = max([orig_total, a.get_xlim()[1]]) * 1.1
         a.set_xlim(xmin, xmax)
         # Remove the right and top borders
+        a.set_xlabel(prop_column.replace(
+            "_", " ").replace("Prop", "Proportion"))
+        a.set_ylabel("Frequency")
+        for tick in a.get_xticklabels():
+            tick.set_rotation('vertical')
         sns.despine()
-    
+    f.tight_layout()
     # Save and close the figure
     plt.savefig("%s_distribution_total_overlap.png" % outfile_stem,
                 dpi=300, bbox_inches='tight')
@@ -385,19 +398,14 @@ def main():
     parser.add_argument("--conserved_codon_file",
                         dest="conserved_file", type=str,
                         help='''Path to bed file containing the conserved
-                        codons of interest''')
-
-    parser.add_argument("--min_overlap",
-                        dest="min_overlap", type=float, default=0.5,
-                        help='''Minimum proportion of a conserved interval
-                        which should be inside a test region''')                        
+                        codons of interest''')                  
                         
     parser.add_argument("--test_file", dest="test_file", type=str,
                         help='''Path to bed file containing the regions
                         you want to intersect with the conserved regions''')
 
     parser.add_argument("--plot_color", dest="plot_color", type=str,
-                        default='#ea820c', help="Colour for histograms")
+                        default='#7a9675', help="Colour for histograms")
 
     parser.add_argument("--outfile_stem", dest="outfile_stem", type=str,
                         help="Output file prefix")
@@ -405,6 +413,12 @@ def main():
     parser.add_argument("--n_shuffles", dest="n_shuffles", type=int,
                         default=1000,
                         help="Number of times to shuffle the intervals")
+
+    parser.add_argument("--min_overlap", dest="min_overlap", type=float,
+                        default=0.5,
+                        help='''Minimum proportion of interval to be in the overlap
+                        to classify a region as overlapping, this fraction can be of
+                        either interval''')
 
     
     args = parser.parse_args()
