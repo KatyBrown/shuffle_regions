@@ -146,29 +146,36 @@ def calcStats(test_bed, conserved_bed, min_overlap):
     '''
     Intersect the conserved intervals with the test intervals and
     calculate:
-        * n_conserved_intervals - the number of conserved intervals of which
-          at least proportion min_overlap is inside a test_region
+        * n_conserved_intervals - the number of conserved intervals which
+          overlap with at least one test interval
         * prop_conserved_intervals - the proportion of conserved intervals of
-          which at least proportion min_overlap is inside a test_region
-        * n_test_intervals - the number of test intervals which contain at least
-          proportion min_overlap of  a conserved interval
+          which overlap with at least one conserved interval
+        * n_test_intervals - the number of test intervals which overlap with
+          at least one conserved interval.
         * prop_test_intervals - the proportion of test intervals which
-          contain at least proportion min_overlap of a conserved interval
+          overlap with at least one conserved interval
         * total_overlap - the total number of nucleotides covered by
-          both the test intervals and the conserved intervals, where at least
-          proportion min_overlap of the test interval overlaps.
+          both the test intervals and the conserved intervals
+        * min_overlap - this proportion of at least one interval or the other
+          must be in the intersection for n_conserved_intervals,
+          prop_conserved_intervals,
+          n_test_intervals and prop_test_intervals.
     '''
 
     # wb - return the intervals in b (conserved_bed) which overlap
     # the intervals in a (test_bed)
     # f - overlap must be at least this proportion of the interval in test_bed
+    # F - overlap must be at least this proportion of the interval in conserved_bed
+    # e - only F or f has to be True
     by_conserved_interval = conserved_bed.intersect(
         test_bed, wa=True, f=min_overlap, F=min_overlap,
         e=True).sort().merge().to_dataframe()
     
     # wa - return the intervals in a (test_bed) which overlap the intervals
-    # in b (conserved_bed) by at least proportion min_overlap of the
-    # b interval
+    # in b (conserved_bed)
+    # f - overlap must be at least this proportion of the interval in test_bed
+    # F - overlap must be at least this proportion of the interval in conserved_bed
+    # e - only F or f has to be True
     by_test_interval = test_bed.intersect(
         conserved_bed, wa=True, f=min_overlap, F=min_overlap,
         e=True).sort().merge().to_dataframe()
