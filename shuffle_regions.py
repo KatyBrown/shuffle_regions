@@ -194,6 +194,8 @@ def calcStats(test_bed, conserved_bed, min_overlap):
     # Number of intervals in conserved_bed which contain at least
     # proportion min_overlap of an interval in test_bed
     n_conserved_intervals = len(by_conserved_interval)
+    
+
     # Proportion of the total conserved intervals this applies to
     prop_conserved_intervals = n_conserved_intervals / len(conserved_bed)
     
@@ -201,12 +203,20 @@ def calcStats(test_bed, conserved_bed, min_overlap):
     # min_overlap with an interval in conserved_bed
     n_test_intervals = len(by_test_interval)
     # Proportion of the test intervals this applies to
-    prop_test_intervals = n_test_intervals / len(test_bed)
     
-    # Total number of nucleotides covered by both the test intervals and
-    # conserved intervals where at least proportion min_overlap of the
-    # test interval overlaps
-    total_overlap = sum(total_overlap['end'] - total_overlap['start'])
+    if len(test_bed) != 0:
+        prop_test_intervals = n_test_intervals / len(test_bed)
+    else:
+        prop_test_intervals = 0
+    
+    
+    if len(total_overlap) != 0:
+        # Total number of nucleotides covered by both the test intervals and
+        # conserved intervals where at least proportion min_overlap of the
+        # test interval overlaps
+        total_overlap = sum(total_overlap['end'] - total_overlap['start'])
+    else:
+        total_overlap = 0
 
     return ([n_conserved_intervals, prop_conserved_intervals,
              n_test_intervals, prop_test_intervals, total_overlap])
